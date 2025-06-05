@@ -2,19 +2,23 @@ import os
 from io import StringIO
 import pandas as pd
 import requests
-from capymoa.stream import stream_from_file
-from capymoa.regressor import AdaptiveRandomForestRegressor
+from capymoa.regressor import FIMTDD
+from capymoa.stream import NumpyStream
+from capymoa.evaluation import prequential_evaluation
 
 
 DATA_URL = "https://huggingface.co/datasets/labiaufba/SSA_StopBusTimeSeries_5/raw/main/loader_03-05_2024.csv"
 
 
-def download_dataset(url: str = DATA_URL) -> pd.DataFrame:
-    """Download the CSV dataset from HuggingFace."""
-    resp = requests.get(url)
-    if resp.status_code != 200:
-        raise RuntimeError(f"Failed to download dataset: {resp.status_code}")
-    df = pd.read_csv(StringIO(resp.text))
+def load_dataset(path: str | None = None, url: str = DATA_URL) -> pd.DataFrame:
+    """Load the CSV dataset from a local path or download it from HuggingFace."""
+    if path and os.path.exists(path):
+        df = pd.read_csv(path)
+    else:
+        resp = requests.get(url)
+        if resp.status_code != 200:
+            raise RuntimeError(f"Failed to download dataset: {resp.status_code}")
+        df = pd.read_csv(StringIO(resp.text))
     df.rename(columns={df.columns[0]: "timestamp"}, inplace=True)
     df["timestamp"] = pd.to_datetime(df["timestamp"])
     return df
@@ -33,36 +37,46 @@ def preprocess_stop_data(df: pd.DataFrame, stop_name: str, stop_id: int) -> pd.D
     return df_stop
 
 
-def run_prediction_per_stop(df_stop: pd.DataFrame, stop_id: int, *, limit: int | None = 1000) -> pd.DataFrame:
-    """Predict passenger counts for a single stop using a streaming model."""
-    tmp_path = f"temp_stop_{stop_id}.csv"
-    df_stop[["hour", "minute", "day", "day_of_week", "stop_id", "actual"]].to_csv(tmp_path, index=False)
+def run_prediction_per_stop(df_stop: pd.DataFrame, stop_id: int) -> pd.DataFrame:
+    """Train a FIMTDD model using CapyMOA and predict passenger counts."""
+    features = ["hour", "minute", "day", "day_of_week", "stop_id"]
 
-    stream = stream_from_file(tmp_path, target_type="numeric")
-    schema = stream.get_schema()
-    model = AdaptiveRandomForestRegressor(schema=schema, ensemble_size=20)
+    X = df_stop[features].to_numpy()
+    y = df_stop["actual"].to_numpy()
 
-    results = []
-    for i, instance in enumerate(stream):
-        if limit is not None and i >= limit:
-            break
-        pred = model.predict(instance) or 0.0
-        model.train(instance)
-        rounded_pred = round(pred)
-        results.append({
-            "timestamp": df_stop.iloc[i]["timestamp"],
-            "actual": instance.y_value,
+    stream = NumpyStream(X, y, target_type="numeric")
+    learner = FIMTDD(stream.get_schema(), random_seed=42)
+
+    results = prequential_evaluation(
+        stream,
+        learner,
+        max_instances=len(X),
+        store_predictions=True,
+        store_y=True,
+        restart_stream=False,
+    )
+
+    preds = pd.Series(results.predictions())
+    rounded_pred = preds.round().astype(int)
+
+    result_df = pd.DataFrame(
+        {
+            "timestamp": df_stop["timestamp"].values,
+            "actual": results.ground_truth_y(),
             "predicted": rounded_pred,
-            "error": abs(instance.y_value - rounded_pred),
-        })
+            "error": (results.ground_truth_y() - rounded_pred).abs(),
+        }
+    )
 
-    os.remove(tmp_path)
-    return pd.DataFrame(results)
+    mae = results.cumulative.mae()
+    print(f"    MAE for stop {stop_id}: {mae:.3f}")
+    return result_df
 
 
 def main() -> None:
     print("🚍 Starting bus stop prediction pipeline")
-    df = download_dataset()
+    dataset_path = os.environ.get("BUS_DATASET_PATH")
+    df = load_dataset(dataset_path)
     stop_ids = df.columns[1:]
 
     for stop_name in stop_ids:
