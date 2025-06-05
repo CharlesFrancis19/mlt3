@@ -28,6 +28,8 @@ def preprocess_stop_data(df: pd.DataFrame, stop_name: str, stop_id: int) -> pd.D
     df_stop["day"] = (df_stop["timestamp"] - df_stop["timestamp"].min()).dt.days
     df_stop["day_of_week"] = df_stop["timestamp"].dt.dayofweek
     df_stop["stop_id"] = stop_id
+    # Store only the time-of-day string to remove the date component
+    df_stop["timestamp"] = df_stop["timestamp"].dt.strftime("%H:%M:%S")
     return df_stop
 
 
