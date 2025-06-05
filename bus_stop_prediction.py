@@ -2,7 +2,7 @@ import os
 from io import StringIO
 import pandas as pd
 import requests
-from capymoa.regressor import FIMTDD
+from capymoa.regressor import AdaptiveRandomForestRegressor
 from capymoa.stream import NumpyStream
 from capymoa.evaluation import prequential_evaluation
 
@@ -38,14 +38,14 @@ def preprocess_stop_data(df: pd.DataFrame, stop_name: str, stop_id: int) -> pd.D
 
 
 def run_prediction_per_stop(df_stop: pd.DataFrame, stop_id: int) -> pd.DataFrame:
-    """Train a FIMTDD model using CapyMOA and predict passenger counts."""
+    """Train an Adaptive Random Forest model using CapyMOA and predict passenger counts."""
     features = ["hour", "minute", "day", "day_of_week", "stop_id"]
 
     X = df_stop[features].to_numpy()
     y = df_stop["actual"].to_numpy()
 
     stream = NumpyStream(X, y, target_type="numeric")
-    learner = FIMTDD(stream.get_schema(), random_seed=42)
+    learner = AdaptiveRandomForestRegressor(stream.get_schema(), ensemble_size=10, random_seed=42)
 
     results = prequential_evaluation(
         stream,
