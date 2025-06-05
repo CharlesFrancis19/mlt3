@@ -46,11 +46,12 @@ def run_prediction_per_stop(df_stop: pd.DataFrame, stop_id: int, *, limit: int |
             break
         pred = model.predict(instance) or 0.0
         model.train(instance)
+        rounded_pred = round(pred)
         results.append({
             "timestamp": df_stop.iloc[i]["timestamp"],
             "actual": instance.y_value,
-            "predicted": pred,
-            "error": abs(instance.y_value - pred),
+            "predicted": rounded_pred,
+            "error": abs(instance.y_value - rounded_pred),
         })
 
     os.remove(tmp_path)
